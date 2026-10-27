@@ -17,12 +17,15 @@ param(
     # Empty: CMake's newest Visual Studio.
     [string]$Generator = '',
     [string]$Configuration = 'Release',
-    [string]$BuildDirectory = (Join-Path $PSScriptRoot '../../build/reshade_addon'),
+    # Empty: build/reshade_addon at the repository root.
+    [string]$BuildDirectory = '',
     [switch]$EnableSessionDiagnostics
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+# Windows PowerShell started with -File leaves $PSScriptRoot empty in parameter defaults.
+if (-not $BuildDirectory) { $BuildDirectory = Join-Path $PSScriptRoot '../../build/reshade_addon' }
 
 foreach ($required in @(
         @{ Path = (Join-Path $StreamlineRoot 'include/sl_dlss_g.h'); Name = 'Streamline SDK (-StreamlineRoot)' },
