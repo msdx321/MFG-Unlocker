@@ -1,0 +1,206 @@
+# When upstream (dashdogy/MFG-Unlocker) publishes a release, merge its tag into this fork's default branch, build
+# MFGUnlocker.addon64 and publish it as release "<tag>-reshade". See README.md, "Automatic upstream builds".
+name: Upstream release
+
+on:
+  schedule:
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Upstream release tag to build (empty for upstream's latest release)
+        required: false
+        default: ''
+      rebuild:
+        description: Replace this fork's release if it already exists
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: upstream-release
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: dashdogy/MFG-Unlocker
+  RELEASE_SUFFIX: -reshade
+  # The add-on's build inputs (README.md, "Building the add-on").
+  STREAMLINE_TAG: v2.14.1
+  RESHADE_TAG: v6.8.0
+  VULKAN_HEADERS_TAG: v1.2.176
+  # The Vulkan SDK whose dxc upstream pins for the DLSS 5 Vulkan passes.
+  VULKAN_SDK_VERSION: 1.4.363.0
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.find.outputs.tag }}
+      build: ${{ steps.find.outputs.build }}
+    steps:
+      - id: find
+        name: Find upstream's release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_TAG: ${{ inputs.tag }}
+          REBUILD: ${{ inputs.rebuild }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          tag="${REQUESTED_TAG:-}"
+          if [ -z "$tag" ]; then
+            tag=$(gh api "repos/$UPSTREAM_REPO/releases/latest" --jq .tag_name)
+          fi
+          if ! [[ "$tag" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            echo "::error::Unexpected tag name '$tag'"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          build=true
+          if [ "$REBUILD" != true ] && gh release view "$tag$RELEASE_SUFFIX" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "Release $tag$RELEASE_SUFFIX already exists"
+            build=false
+          elif [ "$EVENT" = schedule ] && gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/sync/$tag" > /dev/null 2>&1; then
+            echo "::notice::Branch sync/$tag marks a failed attempt at $tag. Fix it, then run this workflow by hand."
+            build=false
+          fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      TAG: ${{ needs.check.outputs.tag }}
+      BRANCH: ${{ github.event.repository.default_branch }}
+      GH_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          # GITHUB_TOKEN cannot push a merge that changes .github/workflows; a SYNC_TOKEN secret with the workflow
+          # scope can.
+          token: ${{ secrets.SYNC_TOKEN || github.token }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Merge upstream's release
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git remote add upstream "https://github.com/$UPSTREAM_REPO.git"
+          git fetch --no-tags upstream "refs/tags/$TAG:refs/tags/$TAG"
+          if git merge-base --is-ancestor "refs/tags/$TAG" HEAD; then
+            echo "$BRANCH already contains $TAG"
+          elif git merge --no-edit -m "Merge upstream $TAG" "refs/tags/$TAG"; then
+            echo "Merged $TAG"
+          else
+            conflicts=$(git diff --name-only --diff-filter=U)
+            if [ "$conflicts" = README.md ] && python .github/scripts/merge_readme.py; then
+              git commit --no-edit
+            else
+              git merge --abort
+              echo "::error::Merging $TAG conflicts in: $(echo $conflicts). Merge it by hand (README.md, \"Keeping up with upstream\"), then run this workflow again."
+              exit 1
+            fi
+          fi
+
+      - name: Restore the pinned dxc
+        id: dxc-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/dxc
+          key: vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}-dxc
+
+      - name: Install the pinned dxc
+        if: steps.dxc-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          temp=$(cygpath -u "$RUNNER_TEMP")
+          curl -fsSL --retry 3 -o "$temp/vulkansdk.exe" \
+            "https://sdk.lunarg.com/sdk/download/$VULKAN_SDK_VERSION/windows/vulkansdk-windows-X64-$VULKAN_SDK_VERSION.exe"
+          "$temp/vulkansdk.exe" --root "$(cygpath -w "$temp/vulkansdk")" --accept-licenses --default-answer \
+            --confirm-command install
+          mkdir -p "$temp/dxc"
+          for file in dxc.exe dxcompiler.dll spirv-val.exe; do
+            cp "$temp/vulkansdk/Bin/$file" "$temp/dxc/"
+          done
+          if [ -f "$temp/vulkansdk/Bin/dxil.dll" ]; then
+            cp "$temp/vulkansdk/Bin/dxil.dll" "$temp/dxc/"
+          fi
+          "$temp/dxc/dxc.exe" --version
+
+      - name: Fetch the SDK headers
+        run: |
+          set -euo pipefail
+          sdk="$(cygpath -u "$RUNNER_TEMP")/sdk"
+          GIT_LFS_SKIP_SMUDGE=1 git -c advice.detachedHead=false clone --quiet --depth 1 --filter=blob:none --sparse --branch "$STREAMLINE_TAG" \
+            https://github.com/NVIDIA-RTX/Streamline "$sdk/streamline"
+          git -C "$sdk/streamline" sparse-checkout set include external/ngx-sdk/include
+          git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$RESHADE_TAG" https://github.com/crosire/reshade "$sdk/reshade"
+          git -C "$sdk/reshade" submodule update --quiet --init --depth 1 deps/imgui
+          git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$VULKAN_HEADERS_TAG" https://github.com/KhronosGroup/Vulkan-Headers \
+            "$sdk/vulkan-headers"
+
+      - name: Build MFGUnlocker.addon64
+        run: |
+          set -euo pipefail
+          temp=$(cygpath -u "$RUNNER_TEMP")
+          powershell -NoProfile -File source/reshade_addon/build.ps1 \
+            -StreamlineRoot "$(cygpath -m "$temp/sdk/streamline")" \
+            -ReShadeRoot "$(cygpath -m "$temp/sdk/reshade")" \
+            -VulkanIncludeDirectory "$(cygpath -m "$temp/sdk/vulkan-headers/include")" \
+            -Dlss5VulkanDxc "$(cygpath -m "$temp/dxc/dxc.exe")" \
+            -EnableSessionDiagnostics
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MFGUnlocker.addon64
+          path: build/reshade_addon/Release/MFGUnlocker.addon64
+          if-no-files-found: error
+
+      - name: Push the merge and publish the release
+        run: |
+          set -euo pipefail
+          git push origin "HEAD:refs/heads/$BRANCH"
+          release="$TAG$RELEASE_SUFFIX"
+          addon=build/reshade_addon/Release/MFGUnlocker.addon64
+          commit=$(git rev-parse HEAD)
+          flags=()
+          {
+            echo "MFG Unlocker [$TAG](https://github.com/$UPSTREAM_REPO/releases/tag/$TAG) as a ReShade 6.8 add-on, built from $commit."
+            echo
+            echo "Install it as the README's \"Install the add-on\" describes. This build has no SM86 kernel cache, so it supports DLSS Frame Generation on RTX 50 and RTX 40 only."
+            if [ -f build/reshade_addon/single_module_review.txt ]; then
+              flags+=(--prerelease)
+              echo
+              echo "**Pre-release:** upstream changed \`single_module.cpp\`, whose start-up code the add-on repeats in \`AttachBackend\`, and that has not been reviewed yet."
+            fi
+            echo
+            echo "SHA-256 of \`MFGUnlocker.addon64\`: \`$(sha256sum "$addon" | cut -d ' ' -f 1)\`"
+          } > "$RUNNER_TEMP/notes.md"
+          if [ ${#flags[@]} -gt 0 ]; then
+            echo "::warning::single_module.cpp changed upstream: review AttachBackend (README.md, \"Keeping up with upstream\"). Published as a pre-release."
+          fi
+          if gh release view "$release" > /dev/null 2>&1; then
+            gh release delete "$release" --yes --cleanup-tag
+          fi
+          gh release create "$release" "$addon" --target "$commit" --title "MFG Unlocker for ReShade $TAG" \
+            --notes-file "$RUNNER_TEMP/notes.md" "${flags[@]}"
+          if git ls-remote --exit-code origin "refs/heads/sync/$TAG" > /dev/null; then
+            git push origin --delete "sync/$TAG"
+          fi
+
+      - name: Mark the failed attempt
+        if: failure()
+        run: git push --force origin "HEAD:refs/heads/sync/$TAG"
