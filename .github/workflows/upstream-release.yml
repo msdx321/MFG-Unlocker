@@ -81,7 +81,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
@@ -89,7 +89,7 @@ jobs:
           # scope can.
           token: ${{ secrets.SYNC_TOKEN || github.token }}
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -117,7 +117,7 @@ jobs:
 
       - name: Restore the pinned dxc
         id: dxc-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/dxc
           key: vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}-dxc
@@ -127,9 +127,9 @@ jobs:
         run: |
           set -euo pipefail
           temp=$(cygpath -u "$RUNNER_TEMP")
-          curl -fsSL --retry 3 -o "$temp/vulkansdk.exe" \
+          curl -fsSL --retry 3 -o "$temp/vulkansdk-installer.exe" \
             "https://sdk.lunarg.com/sdk/download/$VULKAN_SDK_VERSION/windows/vulkansdk-windows-X64-$VULKAN_SDK_VERSION.exe"
-          "$temp/vulkansdk.exe" --root "$(cygpath -w "$temp/vulkansdk")" --accept-licenses --default-answer \
+          "$temp/vulkansdk-installer.exe" --root "$(cygpath -w "$temp/vulkansdk")" --accept-licenses --default-answer \
             --confirm-command install
           mkdir -p "$temp/dxc"
           for file in dxc.exe dxcompiler.dll spirv-val.exe; do
@@ -163,7 +163,7 @@ jobs:
             -Dlss5VulkanDxc "$(cygpath -m "$temp/dxc/dxc.exe")" \
             -EnableSessionDiagnostics
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: MFGUnlocker.addon64
           path: build/reshade_addon/Release/MFGUnlocker.addon64
