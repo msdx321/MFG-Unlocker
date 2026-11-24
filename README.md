@@ -129,7 +129,7 @@ After a merge, rebuild:
 ### Automatic upstream builds
 
 [`.github/workflows/upstream-release.yml`](.github/workflows/upstream-release.yml)
-checks upstream's latest release every six hours. When this fork has no
+checks upstream's latest release daily at 00:23 UTC. When this fork has no
 release for it yet, the workflow:
 
 1. merges upstream's release tag into `main`. A conflict only at the top of
