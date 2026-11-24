@@ -350,7 +350,7 @@ void InitializeUi()
 }
 
 // The add-on's tab in ReShade's window: the built-in menu's settings and footer.
-void DrawPanel(effect_runtime*)
+void DrawPanel(effect_runtime* runtime)
 {
     if (gAttach == reshade_addon::Attach::eDuplicate)
     {
@@ -384,7 +384,7 @@ void DrawPanel(effect_runtime*)
         ImGui::PopStyleColor();
         ImGui::Separator();
     }
-    standalone_ui::Draw();
+    standalone_ui::Draw(runtime->get_device()->get_api() == device_api::d3d11);
     ImGui::Separator();
     ImGui::AlignTextToFramePadding();
     DrawLanguagePicker();

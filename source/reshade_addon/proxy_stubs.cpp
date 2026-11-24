@@ -6,6 +6,7 @@
 #include "overlay_dxgi_proxy.h"
 #include "overlay_adapter_parent.h"
 #include "single_overlay.h"
+#include "rtx_hair/vk_hair_status.h"
 #include <cwchar>
 
 namespace single_overlay::proxy
@@ -23,6 +24,13 @@ HRESULT ParentFactoryCall(ParentFn parent, IDXGIObject* object, REFIID iid, void
     return parent ? parent(object, iid, output) : E_FAIL;
 }
 bool Owned(IUnknown*) noexcept { return false; }
+HRESULT D3D11ChainCall(PFN_D3D11_CREATE_DEVICE_AND_SWAP_CHAIN create, void*, IDXGIAdapter* adapter,
+    D3D_DRIVER_TYPE type, HMODULE software, UINT flags, const D3D_FEATURE_LEVEL* levels, UINT count, UINT sdk,
+    const DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** chain, ID3D11Device** device, D3D_FEATURE_LEVEL* level,
+    ID3D11DeviceContext** context) noexcept
+{
+    return create(adapter, type, software, flags, levels, count, sdk, desc, chain, device, level, context);
+}
 bool WrapUpgraded(void**) noexcept { return false; }
 void Describe(IUnknown* object, wchar_t* text, size_t count) noexcept
 {
@@ -34,6 +42,13 @@ void ReadStatus(MfgSingleModuleStatus&) noexcept {}
 namespace single_overlay::adapter_parent
 {
 void Observe(IUnknown*) noexcept {}
+void ObserveD3D11(IUnknown*) noexcept {}
+}
+
+// The native Vulkan hair route is installed by the proxy's Vulkan gateways.
+namespace rtx_hair::vk
+{
+Status ReadStatus() noexcept { return {}; }
 }
 
 namespace single_overlay

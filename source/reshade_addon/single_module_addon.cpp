@@ -21,7 +21,7 @@ Attach AttachBackend(HINSTANCE instance, LPVOID reserved) noexcept
     const DWORD pathLength = GetModuleFileNameW(instance, modulePath, static_cast<DWORD>(std::size(modulePath)));
     if (!pathLength || pathLength >= std::size(modulePath)) return Attach::eFailed;
     // hostgate.1, crashhost.1: no claim, hooks, worker, log, status file or write probe.
-    if (HostedFromWindowsDirectory() || HostedByCrashReporter()) return Attach::eHostExcluded;
+    if (HostedFromWindowsDirectory() || HostedByCrashReporter() || HostedByChromiumHelper()) return Attach::eHostExcluded;
 
     wchar_t claim[96]{};
     swprintf_s(claim, L"Local\\RTX40MFG-SingleModule-%lu", GetCurrentProcessId());
@@ -48,6 +48,7 @@ Attach AttachBackend(HINSTANCE instance, LPVOID reserved) noexcept
         return Attach::eDuplicate;
     }
     gOwnsBackend = true;
+    embedded_payload::SetLog(&single_module::Log);
     // Decide OptiScaler cooperation before any hook is armed.
     optiscaler_host::ObserveProcessStart(instance);
     if (optiscaler_host::Detected())

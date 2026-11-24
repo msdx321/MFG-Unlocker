@@ -43,7 +43,7 @@ endif()
 
 # single_module_addon.cpp repeats the backend half of single_module.cpp's DllMain. When an upstream merge changes
 # that file, compare the two, then record the new digest here (CRLF-normalized SHA-256 of single_module.cpp).
-set(MFG_REVIEWED_SINGLE_MODULE 34FFEAACBBAFEBDA7455595DD6FCF662DF30289A4E3103C94F51136583B21C4D)
+set(MFG_REVIEWED_SINGLE_MODULE 427F5EF6B244215A4C2ADBB0137D2BB16A0DDD422F364DE9AADCCB6A1286AF8D)
 file(READ "${MFG_NATIVE}/single_module.cpp" single_module_text)
 string(REPLACE "\r\n" "\n" single_module_text "${single_module_text}")
 string(SHA256 single_module_digest "${single_module_text}")
@@ -88,6 +88,10 @@ find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
 set(MFG_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/generated")
 file(READ "${MFG_NATIVE}/witcher_dots/converter.hlsl" DOTS_CONVERTER_SOURCE)
 configure_file("${MFG_NATIVE}/witcher_dots/converter_source.h.in" "${MFG_GENERATED}/converter_source.h" @ONLY)
+file(READ "${MFG_NATIVE}/rtx_hair/dots_converter.hlsl" RTXHAIR_CONVERTER_SOURCE)
+configure_file("${MFG_NATIVE}/rtx_hair/converter_source.h.in" "${MFG_GENERATED}/rtxhair_converter_source.h" @ONLY)
+file(READ "${MFG_NATIVE}/rtx_hair/instance_patch.hlsl" RTXHAIR_INSTANCE_PATCH_SOURCE)
+configure_file("${MFG_NATIVE}/rtx_hair/instance_patch_source.h.in" "${MFG_GENERATED}/rtxhair_instance_patch_source.h" @ONLY)
 # Menu translations: every locale/<code>.po is validated and compiled in (locale/README.md).
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${MFG_NATIVE}/generate_locale.py" generate
     --locale "${MFG_NATIVE}/locale" --output "${MFG_GENERATED}"
@@ -108,7 +112,14 @@ else()
     set(DLSS5_VK_GENERATOR "${MFG_NATIVE}/generate_dlss5_vk_shaders.py")
 endif()
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${DLSS5_VK_GENERATOR}" ${DLSS5_VK_ARGS} COMMAND_ERROR_IS_FATAL ANY)
+include("${MFG_NATIVE}/embedded_payload.cmake")
+# v1.7.1 stores the shader group in a single resource. v1.7.2 keeps each shader at its original ID.
+if(upstream_cmake MATCHES "dlss5_vk 5 3905 ")
+    set(dlss5_group_resource 3905)
+endif()
+mfg_pack_payloads("${MFG_GENERATED}/dlss5_vk_spirv.rc" dlss5_vk 5 ${dlss5_group_resource} "${MFG_GENERATED}" MFG_DLSS5_VK_RESOURCE)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${MFG_NATIVE}/rtx_hair/dots_converter.hlsl" "${MFG_NATIVE}/rtx_hair/instance_patch.hlsl"
     "${MFG_NATIVE}/witcher_dots/converter.hlsl" "${MFG_NATIVE}/generate_locale.py" ${MFG_LOCALE_CATALOGS}
     "${MFG_NATIVE}/generate_dlss5_vk_shaders.py" "${MFG_NATIVE}/dlss5.cpp" "${DLSS5_VK_GENERATOR}")
 
@@ -121,7 +132,7 @@ target_include_directories(MfgAddonMinHook PUBLIC "${MFG_NATIVE}/third_party/min
 target_compile_definitions(MfgAddonMinHook PRIVATE WIN32_LEAN_AND_MEAN)
 set_target_properties(MfgAddonMinHook PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-add_library(MfgAddonObjects OBJECT ${MFG_CORE_SOURCES}
+add_library(MfgAddonObjects OBJECT ${MFG_CORE_SOURCES} ${MFG_EMBEDDED_PAYLOAD_SOURCES}
     "${MFG_NATIVE}/session_diagnostics.cpp" "${MFG_NATIVE}/single_overlay.cpp"
     "${MFG_NATIVE}/overlay_application_imports.cpp" "${MFG_NATIVE}/caller_scoped_import.cpp"
     "${MFG_NATIVE}/gpu_name_override.cpp" "${MFG_NATIVE}/overlay_install.cpp" "${MFG_NATIVE}/localization.cpp"
@@ -129,7 +140,9 @@ add_library(MfgAddonObjects OBJECT ${MFG_CORE_SOURCES}
     "${MFG_NATIVE}/witcher_dots/shader_cache.cpp" "${MFG_NATIVE}/witcher_dots/game_profile.cpp"
     "${MFG_NATIVE}/witcher_dots/game_discovery.cpp" "${MFG_NATIVE}/witcher_dots/gpu_runtime.cpp"
     "${MFG_NATIVE}/witcher_dots/witcher_dots.cpp"
-    single_module_addon.cpp frontend_addon.cpp proxy_stubs.cpp reshade_addon.cpp)
+    "${MFG_NATIVE}/rtx_hair/lss_ir.cpp" "${MFG_NATIVE}/rtx_hair/lss_dxil.cpp"
+    "${MFG_NATIVE}/rtx_hair/dots_builder.cpp" "${MFG_NATIVE}/rtx_hair/instance_patch.cpp" "${MFG_NATIVE}/rtx_hair/universal_hair.cpp"
+    single_module_addon.cpp frontend_addon.cpp proxy_stubs.cpp xess_stubs.cpp reshade_addon.cpp)
 target_compile_features(MfgAddonObjects PRIVATE cxx_std_20)
 target_compile_options(MfgAddonObjects PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/utf-8> $<$<COMPILE_LANGUAGE:CXX>:/Zi>)
 # IMGUI_DISABLE_OBSOLETE_FUNCTIONS matches ReShade's own ImGui build: it changes ImGuiIO's layout.
@@ -156,7 +169,7 @@ target_include_directories(MfgAddonObjects PRIVATE
 set_target_properties(MfgAddonObjects PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 add_library(MFGUnlockerAddon SHARED $<TARGET_OBJECTS:MfgAddonObjects>
-    "${MFG_NATIVE}/single_version.rc" ${MFG_AMPERE_KERNEL_RESOURCE})
+    "${MFG_NATIVE}/single_version.rc" ${MFG_AMPERE_KERNEL_RESOURCE} ${MFG_DLSS5_VK_RESOURCE})
 target_compile_definitions(MFGUnlockerAddon PRIVATE MFG_SINGLE_FILENAME="MFGUnlocker.addon64")
 target_include_directories(MFGUnlockerAddon PRIVATE "${MFG_NATIVE}")
 target_link_libraries(MFGUnlockerAddon PRIVATE MfgAddonMinHook
